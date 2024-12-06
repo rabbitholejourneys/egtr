@@ -191,7 +191,7 @@ class Detr(pl.LightningModule):
         if self.oi_coco_evaluator is not None:
             self.oi_coco_evaluator(labels, res)
 
-    def test_epoch_end(self, outputs):
+    def on_test_epoch_end(self):
         # log OD
         if self.coco_evaluator is not None:
             self.coco_evaluator.synchronize_between_processes()
@@ -529,7 +529,7 @@ if __name__ == "__main__":
             state_dict[k[6:]] = state_dict.pop(k)  # "model."
         module.model.load_state_dict(state_dict)
         if trainer.is_global_zero:
-            module.model.save_pretrained(logger.log_dir)
+            module.model.save_pretrained(logger.log_dir, safe_serialization=False)
 
         if trainer is not None:
             torch.distributed.destroy_process_group()
@@ -557,7 +557,7 @@ if __name__ == "__main__":
 
         # Eval
         trainer = Trainer(
-            precision=args.precision, logger=logger, gpus=1, max_epochs=-1
+            precision=args.precision, logger=logger, devices=1, accelerator="gpu" if args.gpus else "cpu", max_epochs=-1
         )
         if "visual_genome" in args.data_path:
             test_dataset = VGDetection(
