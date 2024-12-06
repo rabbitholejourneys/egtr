@@ -18,20 +18,25 @@ from data.open_image import OIDetection
 from data.visual_genome import VGDetection
 from lib.evaluation.coco_eval import CocoEvaluator
 from lib.evaluation.oi_eval import OICocoEvaluator
+from transformers import PretrainedConfig, DeformableDetrImageProcessor
 from model.deformable_detr import (
     DeformableDetrConfig,
     DeformableDetrFeatureExtractor,
     DeformableDetrFeatureExtractorWithAugmentor,
     DeformableDetrForObjectDetection,
 )
+
+
 from util.misc import use_deterministic_algorithms
 
 seed_everything(42, workers=True)
 
 
-def collate_fn(batch, feature_extractor):
+def collate_fn(batch, image_processor):
     pixel_values = [item[0] for item in batch]
-    encoding = feature_extractor.pad_and_create_pixel_mask(
+    #TODO: correct?
+    #ori code https://gitlab.scai.fraunhofer.de/sergei.kuznetsov/transformers-mod/-/blob/a90d58991f2ad972741d8964b0adf912d5062db8/src/transformers/models/detr/image_processing_detr.py
+    encoding = image_processor.pad(
         pixel_values, return_tensors="pt"
     )
     labels = [item[1] for item in batch]
@@ -61,7 +66,8 @@ class Detr(pl.LightningModule):
     ):
         super().__init__()
         # replace COCO classification head with custom head
-        config = DeformableDetrConfig.from_pretrained(architecture)
+        backbone_config = PretrainedConfig.from_pretrained("facebook/detr-resnet-50")
+        config = DeformableDetrConfig(use_timm_backbone=True, backbone_config=backbone_config) #.from_pretrained(architecture)
         config.architecture = architecture
         config.auxiliary_loss = auxiliary_loss
         config.num_labels = max(id2label.keys()) + 1
@@ -69,9 +75,10 @@ class Detr(pl.LightningModule):
         config.ce_loss_coefficient = ce_loss_coefficient
         config.output_attention_states = False
         self.model = DeformableDetrForObjectDetection(config=config)
-        self.model.model.backbone.load_state_dict(
-            torch.load(f"{backbone_dirpath}/{config.backbone}.pt")
-        )
+        if backbone_dirpath is not None:
+            self.model.model.backbone.load_state_dict(
+                torch.load(f"{backbone_dirpath}/{config.backbone}.pt")
+            )
 
         # see https://github.com/PyTorchLightning/pytorch-lightning/pull/1896
         self.lr = lr
@@ -219,7 +226,7 @@ if __name__ == "__main__":
         type=str,
         required=True,
     )
-    parser.add_argument("--backbone_dirpath", type=str, required=True)
+    parser.add_argument("--backbone_dirpath", type=str, required=False, default=None)
 
     # Architecture
     parser.add_argument("--architecture", type=str, default="SenseTime/deformable-detr")
@@ -263,10 +270,16 @@ if __name__ == "__main__":
     feature_extractor = DeformableDetrFeatureExtractor.from_pretrained(
         args.architecture, size=800, max_size=1333
     )
+    image_processor = DeformableDetrImageProcessor.from_pretrained(
+        args.architecture, size=800, max_size=1333
+    )
     feature_extractor_train = (
         DeformableDetrFeatureExtractorWithAugmentor.from_pretrained(
             args.architecture, size=800, max_size=1333
         )
+    )
+    image_processor_train = DeformableDetrImageProcessor.from_pretrained(
+        args.architecture, size=800, max_size=1333
     )
 
     # Dataset
@@ -299,7 +312,7 @@ if __name__ == "__main__":
     # Dataloader
     train_dataloader = DataLoader(
         train_dataset,
-        collate_fn=lambda x: collate_fn(x, feature_extractor),
+        collate_fn=lambda x: collate_fn(x, image_processor),
         batch_size=args.batch_size,
         pin_memory=True,
         num_workers=args.num_workers,
@@ -308,7 +321,7 @@ if __name__ == "__main__":
     )
     val_dataloader = DataLoader(
         val_dataset,
-        collate_fn=lambda x: collate_fn(x, feature_extractor),
+        collate_fn=lambda x: collate_fn(x, image_processor),
         batch_size=args.batch_size,
         pin_memory=True,
         num_workers=args.num_workers,
@@ -531,7 +544,7 @@ if __name__ == "__main__":
             )
         test_dataloader = DataLoader(
             test_dataset,
-            collate_fn=lambda x: collate_fn(x, feature_extractor),
+            collate_fn=lambda x: collate_fn(x, image_processor),
             batch_size=args.eval_batch_size,
             pin_memory=True,
             num_workers=args.num_workers,
