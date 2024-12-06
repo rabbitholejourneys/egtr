@@ -120,24 +120,50 @@ class Detr(pl.LightningModule):
         }
         log_dict.update({f"training_{k}": v.item() for k, v in loss_dict.items()})
         self.log_dict(log_dict)
+        self.log("train_loss", loss.item(), on_step=True, on_epoch=True, prog_bar=True)
+        
         return loss
 
+#    def validation_step(self, batch, batch_idx):
+#        loss, loss_dict = self.common_step(batch, batch_idx)
+#        loss_dict["loss"] = loss
+#        del loss
+#        return loss_dict
     def validation_step(self, batch, batch_idx):
         loss, loss_dict = self.common_step(batch, batch_idx)
-        loss_dict["loss"] = loss
-        del loss
+        self.log("validation_loss", loss.item(), on_step=False, on_epoch=True, prog_bar=True)
+        
+        # Optionally log other validation metrics
+        for k, v in loss_dict.items():
+            self.log(f"val_{k}", v.item(), on_step=False, on_epoch=True, prog_bar=False)
+    
         return loss_dict
 
-    def validation_epoch_end(self, outputs):
+
+    def on_validation_epoch_end(self):
+        # Use the `self.trainer` object to access outputs
+        outputs = self.trainer.callback_metrics
+
         log_dict = {
             "step": torch.tensor(self.global_step, dtype=torch.float32),
             "epoch": torch.tensor(self.current_epoch, dtype=torch.float32),
         }
-        for k in outputs[0].keys():
-            log_dict[f"validation_" + k] = (
-                torch.stack([x[k] for x in outputs]).mean().item()
-            )
+        if outputs:
+            for k, v in outputs.items():
+                if "val" in k:
+                    log_dict[f"validation_{k}"] = v
         self.log_dict(log_dict, on_epoch=True)
+        
+ #   def validation_epoch_end(self, outputs):
+ #       log_dict = {
+ #           "step": torch.tensor(self.global_step, dtype=torch.float32),
+ #           "epoch": torch.tensor(self.current_epoch, dtype=torch.float32),
+ #       }
+ #       for k in outputs[0].keys():
+ #           log_dict[f"validation_" + k] = (
+ #               torch.stack([x[k] for x in outputs]).mean().item()
+ #           )
+ #       self.log_dict(log_dict, on_epoch=True)
 
     def test_step(self, batch, batch_idx):
         # get the inputs
@@ -411,12 +437,14 @@ if __name__ == "__main__":
             trainer = Trainer(
                 precision=args.precision,
                 logger=logger,
-                gpus=args.gpus,
+                devices=args.gpus,  # Use the `devices` argument for specifying GPU devices
+                accelerator="gpu" if args.gpus else "cpu",  # Automatically choose between CPU and GPU
                 max_epochs=args.max_epochs,
                 gradient_clip_val=args.gradient_clip_val,
                 strategy=DDPStrategy(find_unused_parameters=False),
                 callbacks=[checkpoint_callback, early_stop_callback],
                 accumulate_grad_batches=args.accumulate,
+                enable_progress_bar=True,
             )
             use_deterministic_algorithms()
             if trainer.is_global_zero:
@@ -478,7 +506,8 @@ if __name__ == "__main__":
             trainer = Trainer(
                 precision=args.precision,
                 logger=logger,
-                gpus=args.gpus,
+                devices=args.gpus,  # Use the `devices` argument for specifying GPU devices
+                accelerator="gpu" if args.gpus else "cpu",  # Automatically choose between CPU and GPU
                 max_epochs=args.max_epochs_finetune,
                 gradient_clip_val=args.gradient_clip_val,
                 strategy=DDPStrategy(find_unused_parameters=False),
